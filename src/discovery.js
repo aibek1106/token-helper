@@ -156,10 +156,14 @@ async function startDiscovery({ connection, params, onCandidate, source = 'dexsc
 
         const pick = pickMintFromPair(p);
         if (!pick.mint) { if (DEBUG_DISCOVERY) logger.info('skip: no mint from pair', { reason: pick.reason }); continue; }
-        // Белый список по символам/минамтам
-        const sym = (p.baseToken?.symbol || p.quoteToken?.symbol || '').toUpperCase();
+        // Белый список по символам/минамтам (проверяем обе стороны пары)
+        const baseSym = (p.baseToken?.symbol || '').toUpperCase();
+        const quoteSym = (p.quoteToken?.symbol || '').toUpperCase();
         if (ALLOWED_MINTS.length && !ALLOWED_MINTS.includes(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed mints'); continue; }
-        if (ALLOWED_SYMBOLS.length && sym && !ALLOWED_SYMBOLS.includes(sym)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed symbols', { sym }); continue; }
+        if (ALLOWED_SYMBOLS.length) {
+          const symAllowed = (baseSym && ALLOWED_SYMBOLS.includes(baseSym)) || (quoteSym && ALLOWED_SYMBOLS.includes(quoteSym));
+          if (!symAllowed) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed symbols', { baseSym, quoteSym }); continue; }
+        }
         if (wasSeenMint(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: seen'); continue; }
 
         markSeenMint(pick.mint);
@@ -192,10 +196,14 @@ async function startDiscovery({ connection, params, onCandidate, source = 'dexsc
 
           const pick = pickMintFromGecko(pool.raw);
           if (!pick.mint) { if (DEBUG_DISCOVERY) logger.info('skip: no mint from gecko', { reason: pick.reason, name: pool.name }); continue; }
-          // Белый список: пытаемся извлечь символ
-          const nameSym = (pool.name || '').split('/')[0].trim().toUpperCase();
+          // Белый список: извлекаем символ токена (не SOL) из имени "TOKEN / SOL" или "SOL / TOKEN"
+          const name = pool.name || '';
+          const parts = name.split('/').map(s => s.trim().toUpperCase());
+          const left = parts[0] || '';
+          const right = parts[1] || '';
+          const tokenSym = /(WSOL|SOL)/.test(left) ? right : left;
           if (ALLOWED_MINTS.length && !ALLOWED_MINTS.includes(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed mints'); continue; }
-          if (ALLOWED_SYMBOLS.length && nameSym && !ALLOWED_SYMBOLS.includes(nameSym)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed symbols', { sym: nameSym }); continue; }
+          if (ALLOWED_SYMBOLS.length && tokenSym && !ALLOWED_SYMBOLS.includes(tokenSym)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed symbols', { tokenSym }); continue; }
           if (wasSeenMint(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: seen'); continue; }
 
           markSeenMint(pick.mint);
