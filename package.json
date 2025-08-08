@@ -1,0 +1,16 @@
+{
+  "name": "token-helper",
+  "version": "0.1.0",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0",
+    "bs58": "^4.0.1",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^2.6.9",
+    "node-telegram-bot-api": "^0.63.0"
+  }
+} 
