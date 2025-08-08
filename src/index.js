@@ -16,6 +16,7 @@ const { getQuote, executeSwap } = require('./jupiter');
 const { createPosition, getOpenPositions, getPosition, updatePosition, addTrade } = require('./db');
 const { evaluateAndAct, WSOL } = require('./strategy');
 const { startDiscovery } = require('./discovery');
+const { getOnChainTokenBalance } = require('./solanaHelpers');
 
 const connection = new Connection(RPC_URL, 'confirmed');
 
@@ -154,7 +155,29 @@ async function hasBuyRoute(mint) {
   }
 }
 
-function main() {
+async function syncPositionsOnStartup(notify) {
+  try {
+    const opens = getOpenPositions();
+    if (!opens.length) return;
+    notify && notify(`Актуализирую остатки токенов по ${opens.length} позициям...`);
+    for (const p of opens) {
+      try {
+        const onChain = await getOnChainTokenBalance(connection, wallet.publicKey, p.tokenMint);
+        if (onChain >= 0 && onChain !== p.remainingTokens) {
+          logger.info('startup sync: update remaining', { posId: p.id, prev: p.remainingTokens, onChain });
+          updatePosition({ id: p.id, remainingTokens: onChain, closed: onChain <= 0 ? 1 : p.closed });
+        }
+      } catch (e) {
+        logger.warn('startup sync: position failed', { posId: p.id, error: e.message });
+      }
+    }
+    notify && notify('Актуализация остатков завершена.');
+  } catch (e) {
+    logger.warn('startup sync failed', { error: e.message });
+  }
+}
+
+async function main() {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     logger.error('missing telegram config');
     process.exit(1);
@@ -196,6 +219,7 @@ function main() {
   logger.info('bot started', { rpc: RPC_URL, autoDiscovery: AUTO_DISCOVERY, autoBuy: AUTO_BUY });
   notify('Бот запущен. Используйте /buy, /sell, /positions, /status');
   notify(`Публичный ключ кошелька: ${wallet.publicKey.toBase58()}`);
+  await syncPositionsOnStartup(notify);
   if (AUTO_DISCOVERY) {
     startDiscovery({
       connection,
@@ -224,4 +248,7 @@ function main() {
   startMonitor(notify);
 }
 
-main(); 
+main().catch(e => {
+  logger.error('fatal', { error: e.message });
+  process.exit(1);
+});
