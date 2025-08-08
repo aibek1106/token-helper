@@ -89,6 +89,9 @@ async function evaluateAndAct({ position, params, wallet, connection, notify }) 
 
   await syncRemainingWithOnChain({ connection, wallet, position });
 
+  // Сохраняем обновлённый остаток в БД сразу после синка
+  updatePosition({ id: position.id, remainingTokens: position.remainingTokens });
+
   if (!position.remainingTokens || position.remainingTokens <= 0) {
     position.closed = 1;
     updatePosition({ id: position.id, remainingTokens: 0, closed: 1 });

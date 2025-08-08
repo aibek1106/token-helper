@@ -1,7 +1,7 @@
 const fetch = require('node-fetch');
 const { wasSeenMint, markSeenMint } = require('./db');
 const logger = require('./logger');
-const { DEBUG_DISCOVERY, DEXSCREENER_QUERY, MIN_LIQUIDITY_USD, MIN_VOLUME_H24_USD, MIN_TXNS_M5, MAX_FDV_USD, MIN_PAIR_AGE_MIN } = require('./config');
+const { DEBUG_DISCOVERY, DEXSCREENER_QUERY, MIN_LIQUIDITY_USD, MIN_VOLUME_H24_USD, MIN_TXNS_M5, MAX_FDV_USD, MIN_PAIR_AGE_MIN, ALLOWED_SYMBOLS, ALLOWED_MINTS } = require('./config');
 
 async function fetchJson(url, headers = {}) {
   const res = await fetch(url, {
@@ -156,6 +156,10 @@ async function startDiscovery({ connection, params, onCandidate, source = 'dexsc
 
         const pick = pickMintFromPair(p);
         if (!pick.mint) { if (DEBUG_DISCOVERY) logger.info('skip: no mint from pair', { reason: pick.reason }); continue; }
+        // Белый список по символам/минамтам
+        const sym = (p.baseToken?.symbol || p.quoteToken?.symbol || '').toUpperCase();
+        if (ALLOWED_MINTS.length && !ALLOWED_MINTS.includes(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed mints'); continue; }
+        if (ALLOWED_SYMBOLS.length && sym && !ALLOWED_SYMBOLS.includes(sym)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed symbols', { sym }); continue; }
         if (wasSeenMint(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: seen'); continue; }
 
         markSeenMint(pick.mint);
@@ -188,6 +192,10 @@ async function startDiscovery({ connection, params, onCandidate, source = 'dexsc
 
           const pick = pickMintFromGecko(pool.raw);
           if (!pick.mint) { if (DEBUG_DISCOVERY) logger.info('skip: no mint from gecko', { reason: pick.reason, name: pool.name }); continue; }
+          // Белый список: пытаемся извлечь символ
+          const nameSym = (pool.name || '').split('/')[0].trim().toUpperCase();
+          if (ALLOWED_MINTS.length && !ALLOWED_MINTS.includes(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed mints'); continue; }
+          if (ALLOWED_SYMBOLS.length && nameSym && !ALLOWED_SYMBOLS.includes(nameSym)) { if (DEBUG_DISCOVERY) logger.info('skip: not in allowed symbols', { sym: nameSym }); continue; }
           if (wasSeenMint(pick.mint)) { if (DEBUG_DISCOVERY) logger.info('skip: seen'); continue; }
 
           markSeenMint(pick.mint);

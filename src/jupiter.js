@@ -5,6 +5,21 @@ const JUP_QUOTE = 'https://quote-api.jup.ag/v6/quote';
 const JUP_SWAP = 'https://quote-api.jup.ag/v6/swap';
 const JUP_SWAP_INSTRUCTIONS = 'https://quote-api.jup.ag/v6/swap-instructions';
 
+// Простая лимитация запросов к Jupiter, чтобы не ловить 429 на большом числе позиций
+const requestTimestampsMs = [];
+async function throttleRequests(maxPerMinute = 50) {
+  const now = Date.now();
+  // очистка хвоста старше 60с
+  while (requestTimestampsMs.length && now - requestTimestampsMs[0] > 60000) {
+    requestTimestampsMs.shift();
+  }
+  if (requestTimestampsMs.length >= maxPerMinute) {
+    const waitMs = 60000 - (now - requestTimestampsMs[0]);
+    const jitter = 50 + Math.floor(Math.random() * 150);
+    await new Promise(r => setTimeout(r, Math.max(0, waitMs) + jitter));
+  }
+}
+
 async function getQuote({ inputMint, outputMint, amount, slippageBps, onlyDirectRoutes = false, preferDirectRoutes = false }) {
   const params = new URLSearchParams({
     inputMint,
@@ -20,7 +35,9 @@ async function getQuote({ inputMint, outputMint, amount, slippageBps, onlyDirect
   let delay = 500;
   // Простая ретрай-логика для 429/временных ошибок
   while (true) {
+    await throttleRequests(50);
     const res = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'token-helper/1.0' } });
+    requestTimestampsMs.push(Date.now());
     if (res.ok) {
       const data = await res.json();
       if (!data || !data.outAmount) throw new Error('Empty quote');
