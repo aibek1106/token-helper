@@ -4,6 +4,10 @@ const logger = require('./logger');
 const { getOnChainTokenBalance } = require('./solanaHelpers');
 
 const WSOL = 'So11111111111111111111111111111111111111112';
+const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+// Простая защита от частых квот для одной и той же позиции
+const lastEvalAtMsByPositionId = new Map();
 
 function applyFeeBuffer(amount) {
   const buffered = Math.floor(amount * 0.985);
@@ -53,7 +57,20 @@ async function trySellWithRetry({ inputMint, outputMint, amount, baseSlippageBps
     return await quoteAndSwap({ inputMint, outputMint, amount: safeAmount, slippageBps: slOut, wallet, connection, computeUnitPriceMicroLamports: 350000, preferDirect: true });
   } catch (e2) {
     const msg2 = String(e2.message || e2);
-    logger.error('sell attempt 2 failed', { label, error: msg2 });
+    logger.warn('sell attempt 2 failed', { label, error: msg2 });
+    // Фолбэк: если нет маршрута в WSOL — попробуем продать в USDC
+    if (/COULD_NOT_FIND_ANY_ROUTE|Could not find any route/i.test(msg2)) {
+      try {
+        const altLabel = `${label}/USDC`;
+        logger.info('sell fallback to USDC', { altLabel, amount: safeAmount });
+        return await quoteAndSwap({ inputMint, outputMint: USDC, amount: safeAmount, slippageBps: baseSlippageBps + 200, wallet, connection, computeUnitPriceMicroLamports: 300000, preferDirect: true });
+      } catch (e3) {
+        const msg3 = String(e3.message || e3);
+        logger.error('sell fallback USDC failed', { label, error: msg3 });
+        if (notify) notify(`${label}: фолбэк в USDC не удался (${msg3}). Сделка отменена.`);
+        throw e3;
+      }
+    }
     if (notify) notify(`${label}: попытка 2 не удалась (${msg2}). Сделка отменена.`);
     throw e2;
   }
@@ -62,18 +79,46 @@ async function trySellWithRetry({ inputMint, outputMint, amount, baseSlippageBps
 async function evaluateAndAct({ position, params, wallet, connection, notify }) {
   if (position.closed) return;
 
+  // Лимитер частоты оценок на позицию
+  const nowMs = Date.now();
+  const last = lastEvalAtMsByPositionId.get(position.id) || 0;
+  if (nowMs - last < Math.max(5000, (params.pollMs || 15000) / 3)) {
+    return;
+  }
+  lastEvalAtMsByPositionId.set(position.id, nowMs);
+
   await syncRemainingWithOnChain({ connection, wallet, position });
+
+  if (!position.remainingTokens || position.remainingTokens <= 0) {
+    position.closed = 1;
+    updatePosition({ id: position.id, remainingTokens: 0, closed: 1 });
+    if (notify) notify(`Позиция ${position.id} закрыта: баланс токена 0.`);
+    return;
+  }
 
   let sampleTokens = Math.floor(position.remainingTokens * 0.1);
   if (sampleTokens < 1) sampleTokens = position.remainingTokens;
 
-  const q = await getQuote({
-    inputMint: position.tokenMint,
-    outputMint: WSOL,
-    amount: sampleTokens,
-    slippageBps: params.slOut,
-  });
-  const perTokenNow = Number(q.outAmount) / sampleTokens;
+  let perTokenNow;
+  try {
+    const q = await getQuote({
+      inputMint: position.tokenMint,
+      outputMint: WSOL,
+      amount: sampleTokens,
+      slippageBps: params.slOut,
+    });
+    perTokenNow = Number(q.outAmount) / Math.max(1, sampleTokens);
+  } catch (e) {
+    const msg = String(e.message || e);
+    // Если лимит/нет маршрута — попробуем позже, чтобы не ловить 429
+    if (/Too Many Requests|COULD_NOT_FIND_ANY_ROUTE|Could not find any route/i.test(msg)) {
+      logger.warn('evaluate: quote skipped', { posId: position.id, error: msg });
+      return;
+    }
+    // Прочие ошибки — лог и выход
+    logger.error('evaluate: quote error', { posId: position.id, error: msg });
+    return;
+  }
 
   let peak = Math.max(position.peakPerTokenLamports, perTokenNow);
   const gain = perTokenNow / position.entryPerTokenLamports - 1;
